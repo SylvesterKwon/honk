@@ -55,29 +55,33 @@ class UniformFilterGenerator:
                         "max": float(series.max()),
                     }
 
-    def generate(self, num_filters: int) -> dict:
+    def generate(self, num_filters: int) -> list[dict]:
         """Generate a filter with num_filters random attributes."""
         available = [c for c in self.columns if c.name in self.stats]
         k = min(num_filters, len(available))
         chosen = self.rng.choice(available, size=k, replace=False)
 
-        filters = {}
+        filters = []
         for col in chosen:
             stat = self.stats[col.name]
             if stat["type"] == "equality":
                 value = self.rng.choice(stat["values"])
-                filters[col.name] = _to_python(value)
+                filters.append({"attr": col.name, "op": "eq", "value": _to_python(value)})
             elif stat["dtype"] == "datetime":
                 min_ts = stat["min"].timestamp()
                 max_ts = stat["max"].timestamp()
                 a, b = sorted(self.rng.uniform(min_ts, max_ts, size=2))
-                filters[col.name] = [
-                    pd.Timestamp(a, unit="s").isoformat(),
-                    pd.Timestamp(b, unit="s").isoformat(),
-                ]
+                filters.append({
+                    "attr": col.name, "op": "range",
+                    "lo": pd.Timestamp(a, unit="s").isoformat(),
+                    "hi": pd.Timestamp(b, unit="s").isoformat(),
+                })
             else:
                 a, b = sorted(self.rng.uniform(stat["min"], stat["max"], size=2))
-                filters[col.name] = [round(a, 2), round(b, 2)]
+                filters.append({
+                    "attr": col.name, "op": "range",
+                    "lo": round(a, 2), "hi": round(b, 2),
+                })
 
         return filters
 
@@ -126,7 +130,7 @@ class SelectivityFilterGenerator:
         sigma: float,
         k: int | None = None,
         attr_indices: list[int] | None = None,
-    ) -> dict:
+    ) -> list[dict]:
         """Generate a filter with expected selectivity sigma.
 
         Args:
@@ -145,21 +149,23 @@ class SelectivityFilterGenerator:
             raise ValueError("Either k or attr_indices must be provided")
 
         if not chosen:
-            return {}
+            return []
 
         # Per-attribute selectivity under independence assumption
         per_attr_sel = sigma ** (1.0 / len(chosen))
 
-        filters = {}
+        filters = []
         for col in chosen:
             meta = self.col_meta[col.name]
 
             if meta["type"] == "equality":
-                filters[col.name] = self._generate_equality(meta, per_attr_sel)
+                filters.append({"attr": col.name, "op": "eq", "value": self._generate_equality(meta, per_attr_sel)})
             elif meta["dtype"] == "datetime":
-                filters[col.name] = self._generate_range_datetime(meta, per_attr_sel)
+                lo, hi = self._generate_range_datetime(meta, per_attr_sel)
+                filters.append({"attr": col.name, "op": "range", "lo": lo, "hi": hi})
             else:
-                filters[col.name] = self._generate_range_numeric(meta, per_attr_sel)
+                lo, hi = self._generate_range_numeric(meta, per_attr_sel)
+                filters.append({"attr": col.name, "op": "range", "lo": lo, "hi": hi})
 
         return filters
 
@@ -171,7 +177,7 @@ class SelectivityFilterGenerator:
         idx = int(np.argmin(np.abs(freqs - target_sel)))
         return _to_python(values[idx])
 
-    def _generate_range_numeric(self, meta: dict, target_sel: float) -> list:
+    def _generate_range_numeric(self, meta: dict, target_sel: float) -> tuple:
         """Generate a numeric range [lo, hi) covering ~target_sel fraction of data."""
         sorted_vals = meta["sorted"]
         n = len(sorted_vals)
@@ -188,9 +194,9 @@ class SelectivityFilterGenerator:
 
         lo = round(float(sorted_vals[lo_idx]), 2)
         hi = round(float(sorted_vals[hi_idx]), 2)
-        return [lo, hi]
+        return (lo, hi)
 
-    def _generate_range_datetime(self, meta: dict, target_sel: float) -> list:
+    def _generate_range_datetime(self, meta: dict, target_sel: float) -> tuple:
         """Generate a datetime range [lo, hi) covering ~target_sel fraction of data."""
         sorted_vals = meta["sorted"]
         n = len(sorted_vals)
@@ -205,4 +211,4 @@ class SelectivityFilterGenerator:
 
         lo = pd.Timestamp(sorted_vals[lo_idx]).isoformat()
         hi = pd.Timestamp(sorted_vals[hi_idx]).isoformat()
-        return [lo, hi]
+        return (lo, hi)

@@ -160,7 +160,7 @@ Tab-delimited TSV:
 ```
 w	550e8400-...	{"VendorID":2,"fare_amount":12.50,...}
 u	550e8400-...	{"VendorID":1,"fare_amount":8.75,...}
-r	{"filters":{"payment_type":1,"fare_amount":[5.0,25.0]}}
+r	{"filters":[{"attr":"payment_type","op":"eq","value":1},{"attr":"fare_amount","op":"range","lo":5.0,"hi":25.0}]}
 p	60
 ```
 
@@ -171,7 +171,13 @@ p	60
 | `r` | `r\t<JSON>` | Read (SELECT) — query with filter conditions |
 | `p` | `p\t<seconds>` | Pause — wait for the specified duration |
 
-In filter JSON, scalar values denote equality match; arrays `[min, max]` denote range match.
+Each filter object has an explicit `op` field:
+
+| Op | Fields | Description |
+|----|--------|-------------|
+| `eq` | `attr`, `value` | Equality match on a single value |
+| `in` | `attr`, `values` | Equality match on any of the given values |
+| `range` | `attr`, `lo`, `hi` | Range match `[lo, hi)` |
 
 ## Update Target Sampling
 
