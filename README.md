@@ -173,6 +173,11 @@ p	60
 
 In filter JSON, scalar values denote equality match; arrays `[min, max]` denote range match.
 
+## Update Target Sampling
+
+When `update_ratio > 0`, the generator must select previously written keys as update targets.
+Rather than storing every key ever written (which would require O(N) memory), honk uses reservoir sampling with a fixed-capacity buffer (default 100,000 keys).
+
 ## Row Budget
 
 Dataset rows consumed per phase: `rows + ceil(rows * update_ratio)`.

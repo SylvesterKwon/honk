@@ -21,6 +21,41 @@ from .writer import TSVWriter
 logger = logging.getLogger(__name__)
 
 
+class PKReservoir:
+    """Fixed-size reservoir maintaining uniform random sampling over all appended keys.
+
+    Uses Algorithm R (Vitter, 1985) to keep at most *capacity* keys in memory
+    while guaranteeing that every key ever appended has equal probability of
+    being selected by :meth:`random_choice`.  This bounds memory usage to
+    O(capacity) regardless of total write count.
+    """
+
+    _DEFAULT_CAPACITY = 100_000
+
+    def __init__(self, capacity: int = _DEFAULT_CAPACITY) -> None:
+        self._buf: list[uuid.UUID] = []
+        self._capacity = capacity
+        self._total = 0
+
+    def append(self, pk: uuid.UUID, rng: np.random.Generator) -> None:
+        self._total += 1
+        if len(self._buf) < self._capacity:
+            self._buf.append(pk)
+        else:
+            j = int(rng.integers(self._total))
+            if j < self._capacity:
+                self._buf[j] = pk
+
+    def random_choice(self, rng: np.random.Generator) -> uuid.UUID:
+        return self._buf[int(rng.integers(len(self._buf)))]
+
+    def __len__(self) -> int:
+        return self._total
+
+    def __bool__(self) -> bool:
+        return self._total > 0
+
+
 def _row_to_dict(row: pd.Series) -> dict:
     """Convert a DataFrame row to a plain dict."""
     return row.to_dict()
@@ -61,7 +96,7 @@ def _generate_read(
 
 def _emit_updates(
     update_ratio: float,
-    pk_buffer: list[uuid.UUID],
+    pk_buffer: PKReservoir,
     cursor: DatasetCursor,
     writer: TSVWriter,
     rng: np.random.Generator,
@@ -75,7 +110,7 @@ def _emit_updates(
     if frac_part > 0 and rng.random() < frac_part:
         num_updates += 1
     for _ in range(num_updates):
-        target_pk = pk_buffer[rng.integers(len(pk_buffer))]
+        target_pk = pk_buffer.random_choice(rng)
         new_row = cursor.consume(1).iloc[0]
         writer.write_update(target_pk, _row_to_dict(new_row))
 
@@ -89,7 +124,7 @@ def execute_phases(
     rng: np.random.Generator,
 ) -> None:
     """Execute all phases in sequence."""
-    pk_buffer: list[uuid.UUID] = []
+    pk_buffer = PKReservoir()
     for phase in config.phases:
         if isinstance(phase, WriteOnlyPhase):
             _run_write_only(phase, cursor, writer, rng, pk_buffer)
@@ -109,14 +144,14 @@ def _run_write_only(
     cursor: DatasetCursor,
     writer: TSVWriter,
     rng: np.random.Generator,
-    pk_buffer: list[uuid.UUID],
+    pk_buffer: PKReservoir,
 ) -> None:
     logger.info("Phase '%s': write_only, %d rows, update_ratio=%.2f", phase.label, phase.rows, phase.update_ratio)
     chunk = cursor.consume(phase.rows)
     for _, row in chunk.iterrows():
         pk = _make_uuid(rng)
         writer.write_row(pk, _row_to_dict(row))
-        pk_buffer.append(pk)
+        pk_buffer.append(pk, rng)
         _emit_updates(phase.update_ratio, pk_buffer, cursor, writer, rng)
 
 
@@ -132,7 +167,7 @@ def _run_mixed(
     selectivity_gen: SelectivityFilterGenerator,
     writer: TSVWriter,
     rng: np.random.Generator,
-    pk_buffer: list[uuid.UUID],
+    pk_buffer: PKReservoir,
 ) -> None:
     logger.info(
         "Phase '%s': mixed, %d rows, read_ratio=%.2f, update_ratio=%.2f, %d query blocks",
@@ -150,7 +185,7 @@ def _run_mixed(
         # Write
         pk = _make_uuid(rng)
         writer.write_row(pk, _row_to_dict(row))
-        pk_buffer.append(pk)
+        pk_buffer.append(pk, rng)
 
         # Updates
         _emit_updates(phase.update_ratio, pk_buffer, cursor, writer, rng)
