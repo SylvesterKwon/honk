@@ -2,6 +2,8 @@
 
 Multi-attribute filtering query benchmark workload generator using NYC Yellow Taxi data.
 
+Generates realistic OLTP workloads (write, update, read) targeting KV storage systems.
+
 ## Setup
 
 ```bash
@@ -23,63 +25,156 @@ python download.py --year 2022-2024
 python download.py --year 2024 --month 1 -y
 ```
 
-Before downloading, the file list and total size are displayed with a `[y/N]` confirmation.
-
 ### 2. Generate Workload
 
+Write a JSON config file, then run `honk run` to generate the workload.
+
 ```bash
-# Generate with default settings
-python generate.py --input-dir ./data --output workload.tsv
-
-# Custom settings
-python generate.py \
-  --input-dir ./data \
-  --output workload.tsv \
-  --rw-ratio 5 \
-  --num-filters 2 \
-  --filter-columns fare_amount trip_distance payment_type \
-  --limit 1000 \
-  --seed 123
+python -m honk.cli run workloads/sample.json --output_dir ./output --data_dir ./data
 ```
 
-### Output Format
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `config` (positional) | Path to workload JSON config file | (required) |
+| `--output_dir` | Output directory | (required) |
+| `--data_dir` | Base directory for dataset parquet files | `./data` |
 
-Tab-delimited TSV file:
+Output files:
+- `workload.tsv` — Generated workload
+- `workload.json` — Copy of config for reproducibility
+- `honk.log` — Execution log
+
+## Config Format
+
+```json
+{
+  "dataset": ["yellow_tripdata_2025-01.parquet", ...],
+  "seed": 42,
+  "phases": [...]
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `dataset` | `string[]` | (required) | List of parquet filenames |
+| `seed` | `int` | `42` | Random seed for reproducibility |
+| `phases` | `Phase[]` | `[]` | List of phase definitions |
+
+### Phases
+
+#### `write_only` — Pure writes + updates
+
+```json
+{
+  "label": "preload",
+  "type": "write_only",
+  "rows": 10000,
+  "update_ratio": 0.1
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `rows` | `int` | (required) | Number of rows to write |
+| `update_ratio` | `float` | `0.0` | Average number of updates per write |
+
+#### `pause` — Wait
+
+```json
+{
+  "label": "stabilize",
+  "type": "pause",
+  "duration_seconds": 60
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `duration_seconds` | `float` | (required) | Pause duration in seconds |
+
+#### `mixed` — Interleaved writes, updates, and reads
+
+```json
+{
+  "label": "mixed",
+  "type": "mixed",
+  "rows": 100000,
+  "read_ratio": 10,
+  "update_ratio": 0.1,
+  "queries": [...]
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `rows` | `int` | (required) | Number of rows to write |
+| `read_ratio` | `float` | (required) | Average number of reads per write |
+| `update_ratio` | `float` | `0.0` | Average number of updates per write |
+| `queries` | `QueryBlock[]` | (required) | Query block definitions |
+
+### Query Blocks
+
+Defines read queries for `mixed` phases. Blocks are sampled probabilistically by `weight`.
+
+#### `selectivity` strategy — Target selectivity-based filtering
+
+```json
+{
+  "label": "sweep_sigma_k",
+  "strategy": "selectivity",
+  "expected_selectivity": [0.1, 0.01, 0.001],
+  "query_attr_num": [2, 4, 8],
+  "weight": 2
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `expected_selectivity` | `float \| float[]` | Target selectivity (0.0–1.0). Arrays are Cartesian-expanded |
+| `query_attr_num` | `int \| int[]` | Number of random attributes to filter on. Arrays are Cartesian-expanded |
+| `query_attr_indices` | `int[]` | Fixed column indices to filter on (mutually exclusive with `query_attr_num`) |
+| `weight` | `float` | Sampling weight (default: 1) |
+
+When both `expected_selectivity` and `query_attr_num` are arrays, all combinations are expanded.
+
+#### `uniform` strategy — Uniform random filtering
+
+```json
+{
+  "label": "baseline",
+  "strategy": "uniform",
+  "num_filters": 3,
+  "weight": 1
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `num_filters` | `int` | Number of random attributes to filter on |
+| `weight` | `float` | Sampling weight (default: 1) |
+
+## Output Format
+
+Tab-delimited TSV:
 
 ```
-TIMESTAMP	COMMAND	VALUE
-0	w	{"tpep_pickup_datetime":"2024-01-01T00:57:55","passenger_count":1,...}
-0	r	{"filters":{"payment_type":1,"fare_amount":[5.0,25.0],"trip_distance":[0.5,3.0]}}
+w	550e8400-...	{"VendorID":2,"fare_amount":12.50,...}
+u	550e8400-...	{"VendorID":1,"fare_amount":8.75,...}
+r	{"filters":{"payment_type":1,"fare_amount":[5.0,25.0]}}
+p	60
 ```
 
-| Field | Description |
-|-------|-------------|
-| `TIMESTAMP` | Millisecond offset from the first record |
-| `w` | Write — original record JSON (for INSERT) |
-| `r` | Read — multi-attribute filter condition JSON (for SELECT/FILTER) |
+| Op | Format | Description |
+|----|--------|-------------|
+| `w` | `w\t<UUID>\t<JSON>` | Write (INSERT) — insert a new record |
+| `u` | `u\t<UUID>\t<JSON>` | Update (FULL REPLACE) — replace an existing record at the given PK |
+| `r` | `r\t<JSON>` | Read (SELECT) — query with filter conditions |
+| `p` | `p\t<seconds>` | Pause — wait for the specified duration |
 
-## Options
+In filter JSON, scalar values denote equality match; arrays `[min, max]` denote range match.
 
-### download.py
+## Row Budget
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--year` | Year(s) (range: `2022-2024`, individual: `2022 2023`) | (required) |
-| `--month` | Month(s) | 1-12 |
-| `--output-dir` | Save directory | `./data` |
-| `-y` | Skip confirmation | `false` |
+Dataset rows consumed per phase: `rows + ceil(rows * update_ratio)`.
 
-### generate.py
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--input-dir` | Parquet directory | `./data` |
-| `--output` | Output file | `./workload.tsv` |
-| `--rw-ratio` | Read:write ratio | `10` |
-| `--num-filters` | Number of filter attributes per read query | `3` |
-| `--filter-columns` | Filter columns to use | all |
-| `--limit` | Max number of instructions | unlimited |
-| `--seed` | Random seed | `42` |
-
-## Filterable Columns
-TODO: Add link to NYC Taxi dataset documentation
+An error is raised if the total across all phases exceeds the available dataset rows.

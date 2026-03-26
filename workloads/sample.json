@@ -30,6 +30,7 @@
       "type": "mixed",
       "rows": 100000,
       "read_ratio": 10,
+      "update_ratio": 0.1,
       "queries": [
         {
           "label": "sweep_sigma_k",

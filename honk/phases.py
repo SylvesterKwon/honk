@@ -59,6 +59,27 @@ def _generate_read(
         raise ValueError(f"Unknown strategy: {block.strategy}")
 
 
+def _emit_updates(
+    update_ratio: float,
+    pk_buffer: list[uuid.UUID],
+    cursor: DatasetCursor,
+    writer: TSVWriter,
+    rng: np.random.Generator,
+) -> None:
+    """Generate update operations using probabilistic rounding."""
+    if update_ratio <= 0 or not pk_buffer:
+        return
+    int_part = int(update_ratio)
+    frac_part = update_ratio - int_part
+    num_updates = int_part
+    if frac_part > 0 and rng.random() < frac_part:
+        num_updates += 1
+    for _ in range(num_updates):
+        target_pk = pk_buffer[rng.integers(len(pk_buffer))]
+        new_row = cursor.consume(1).iloc[0]
+        writer.write_update(target_pk, _row_to_dict(new_row))
+
+
 def execute_phases(
     config: WorkloadConfig,
     cursor: DatasetCursor,
@@ -68,17 +89,18 @@ def execute_phases(
     rng: np.random.Generator,
 ) -> None:
     """Execute all phases in sequence."""
+    pk_buffer: list[uuid.UUID] = []
     for phase in config.phases:
         if isinstance(phase, WriteOnlyPhase):
-            _run_write_only(phase, cursor, writer, rng)
+            _run_write_only(phase, cursor, writer, rng, pk_buffer)
         elif isinstance(phase, PausePhase):
             _run_pause(phase, writer)
         elif isinstance(phase, MixedPhase):
-            _run_mixed(phase, cursor, uniform_gen, selectivity_gen, writer, rng)
+            _run_mixed(phase, cursor, uniform_gen, selectivity_gen, writer, rng, pk_buffer)
 
     logger.info(
-        "Generation complete: %d writes, %d reads, %d pauses",
-        writer.writes, writer.reads, writer.pauses,
+        "Generation complete: %d writes, %d updates, %d reads, %d pauses",
+        writer.writes, writer.updates, writer.reads, writer.pauses,
     )
 
 
@@ -87,12 +109,15 @@ def _run_write_only(
     cursor: DatasetCursor,
     writer: TSVWriter,
     rng: np.random.Generator,
+    pk_buffer: list[uuid.UUID],
 ) -> None:
-    logger.info("Phase '%s': write_only, %d rows", phase.label, phase.rows)
+    logger.info("Phase '%s': write_only, %d rows, update_ratio=%.2f", phase.label, phase.rows, phase.update_ratio)
     chunk = cursor.consume(phase.rows)
     for _, row in chunk.iterrows():
         pk = _make_uuid(rng)
         writer.write_row(pk, _row_to_dict(row))
+        pk_buffer.append(pk)
+        _emit_updates(phase.update_ratio, pk_buffer, cursor, writer, rng)
 
 
 def _run_pause(phase: PausePhase, writer: TSVWriter) -> None:
@@ -107,10 +132,11 @@ def _run_mixed(
     selectivity_gen: SelectivityFilterGenerator,
     writer: TSVWriter,
     rng: np.random.Generator,
+    pk_buffer: list[uuid.UUID],
 ) -> None:
     logger.info(
-        "Phase '%s': mixed, %d rows, read_ratio=%.2f, %d query blocks",
-        phase.label, phase.rows, phase.read_ratio, len(phase.queries),
+        "Phase '%s': mixed, %d rows, read_ratio=%.2f, update_ratio=%.2f, %d query blocks",
+        phase.label, phase.rows, phase.read_ratio, phase.update_ratio, len(phase.queries),
     )
 
     probs, blocks = _build_query_sampler(phase.queries)
@@ -124,6 +150,10 @@ def _run_mixed(
         # Write
         pk = _make_uuid(rng)
         writer.write_row(pk, _row_to_dict(row))
+        pk_buffer.append(pk)
+
+        # Updates
+        _emit_updates(phase.update_ratio, pk_buffer, cursor, writer, rng)
 
         # Determine read count
         num_reads = int_part

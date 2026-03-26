@@ -2,6 +2,7 @@
 
 import itertools
 import json
+import math
 from dataclasses import dataclass, field
 
 
@@ -27,6 +28,7 @@ class ExpandedQueryBlock:
 class WriteOnlyPhase:
     label: str
     rows: int
+    update_ratio: float = 0.0
 
 
 @dataclass
@@ -40,6 +42,7 @@ class MixedPhase:
     label: str
     rows: int
     read_ratio: float
+    update_ratio: float = 0.0
     queries: list[ExpandedQueryBlock] = field(default_factory=list)
 
 
@@ -54,11 +57,11 @@ class WorkloadConfig:
 
     @property
     def total_write_rows(self) -> int:
-        """Total rows consumed across all phases."""
+        """Total rows consumed across all phases (writes + updates)."""
         total = 0
         for p in self.phases:
             if isinstance(p, (WriteOnlyPhase, MixedPhase)):
-                total += p.rows
+                total += p.rows + math.ceil(p.rows * p.update_ratio)
         return total
 
 
@@ -154,7 +157,11 @@ def _parse_phase(raw: dict) -> Phase:
     phase_type = raw.get("type")
 
     if phase_type == "write_only":
-        return WriteOnlyPhase(label=label, rows=raw["rows"])
+        return WriteOnlyPhase(
+            label=label,
+            rows=raw["rows"],
+            update_ratio=raw.get("update_ratio", 0.0),
+        )
 
     elif phase_type == "pause":
         return PausePhase(label=label, duration_seconds=raw["duration_seconds"])
@@ -165,6 +172,7 @@ def _parse_phase(raw: dict) -> Phase:
             label=label,
             rows=raw["rows"],
             read_ratio=raw["read_ratio"],
+            update_ratio=raw.get("update_ratio", 0.0),
             queries=queries,
         )
 
