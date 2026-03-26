@@ -1,4 +1,4 @@
-"""Filter generation: uniform random and selectivity-targeted strategies."""
+"""Filter generation: uniform random, selectivity-targeted, and two-point strategies."""
 
 import numpy as np
 import pandas as pd
@@ -55,10 +55,10 @@ class UniformFilterGenerator:
                         "max": float(series.max()),
                     }
 
-    def generate(self, num_filters: int) -> list[dict]:
-        """Generate a filter with num_filters random attributes."""
+    def generate(self, query_attr_num: int) -> list[dict]:
+        """Generate a filter with query_attr_num random attributes."""
         available = [c for c in self.columns if c.name in self.stats]
-        k = min(num_filters, len(available))
+        k = min(query_attr_num, len(available))
         chosen = self.rng.choice(available, size=k, replace=False)
 
         filters = []
@@ -86,155 +86,67 @@ class UniformFilterGenerator:
         return filters
 
 
-class SelectivityFilterGenerator:
-    """Generate filters targeting a specific overall selectivity."""
+class TwoPointFilterGenerator:
+    """Generate filters by sampling two actual data points and using their values as range bounds."""
 
     def __init__(self, df: pd.DataFrame, columns: list[Column], rng: np.random.Generator):
         self.rng = rng
         self.columns = columns
-        self.col_meta: dict[str, dict] = {}
+        self.df = df
+        self.available_columns = [c for c in columns if c.name in df.columns]
 
-        for col in columns:
-            if col.name not in df.columns:
-                continue
-            series = df[col.name].dropna()
-            if series.empty:
-                continue
+    def generate(self, query_attr_num: int) -> list[dict]:
+        """Pick k random attributes, sample 2 records, build filters from their values."""
+        k = min(query_attr_num, len(self.available_columns))
+        chosen_cols = list(self.rng.choice(self.available_columns, size=k, replace=False))
 
-            if col.filter_type == FilterType.EQUALITY:
-                freqs = series.value_counts(normalize=True)
-                # Store as sorted list of (value, frequency) for closest-match lookup
-                self.col_meta[col.name] = {
-                    "type": "equality",
-                    "values": freqs.index.tolist(),
-                    "freqs": freqs.values,  # aligned with values
-                }
-            else:
-                if col.dtype == "datetime":
-                    sorted_vals = np.sort(series.values.astype("datetime64[ns]"))
-                    self.col_meta[col.name] = {
-                        "type": "range",
-                        "dtype": "datetime",
-                        "sorted": sorted_vals,
-                    }
-                else:
-                    sorted_vals = np.sort(series.values.astype(float))
-                    self.col_meta[col.name] = {
-                        "type": "range",
-                        "dtype": "numeric",
-                        "sorted": sorted_vals,
-                    }
-
-    def generate(
-        self,
-        sigma: float,
-        k: int | None = None,
-        attr_names: list[str] | None = None,
-    ) -> list[dict]:
-        """Generate a filter with expected selectivity sigma.
-
-        Args:
-            sigma: Target overall selectivity (fraction of rows matching).
-            k: Number of attributes to use (randomly chosen). Mutually exclusive with attr_names.
-            attr_names: Specific column names to use.
-        """
-        available = [c for c in self.columns if c.name in self.col_meta]
-
-        if attr_names is not None:
-            available_map = {c.name: c for c in available}
-            chosen = [available_map[n] for n in attr_names if n in available_map]
-        elif k is not None:
-            num = min(k, len(available))
-            chosen = list(self.rng.choice(available, size=num, replace=False))
-        else:
-            raise ValueError("Either k or attr_names must be provided")
-
-        if not chosen:
-            return []
-
-        # Per-attribute selectivity under independence assumption
-        per_attr_sel = sigma ** (1.0 / len(chosen))
+        indices = self.rng.choice(len(self.df), size=2, replace=False)
+        row_a = self.df.iloc[indices[0]]
+        row_b = self.df.iloc[indices[1]]
 
         filters = []
-        for col in chosen:
-            meta = self.col_meta[col.name]
+        for col in chosen_cols:
+            val_a = row_a[col.name]
+            val_b = row_b[col.name]
 
-            if meta["type"] == "equality":
-                filters.append(self._generate_equality(col.name, meta, per_attr_sel))
-            elif meta["dtype"] == "datetime":
-                lo, hi = self._generate_range_datetime(meta, per_attr_sel)
-                filters.append({"attr": col.name, "op": "range", "lo": lo, "hi": hi})
+            if pd.isna(val_a) and pd.isna(val_b):
+                continue
+            if pd.isna(val_a):
+                val_a = val_b
+            if pd.isna(val_b):
+                val_b = val_a
+
+            if col.filter_type == FilterType.EQUALITY:
+                chosen_val = val_a if self.rng.random() < 0.5 else val_b
+                filters.append({
+                    "attr": col.name,
+                    "op": "eq",
+                    "value": _to_python(chosen_val),
+                })
             else:
-                lo, hi = self._generate_range_numeric(meta, per_attr_sel)
-                filters.append({"attr": col.name, "op": "range", "lo": lo, "hi": hi})
+                lo, hi = (val_a, val_b) if val_a <= val_b else (val_b, val_a)
+
+                if col.dtype == "datetime":
+                    lo_str = pd.Timestamp(lo).isoformat()
+                    hi_str = pd.Timestamp(hi).isoformat()
+                    if lo == hi:
+                        hi_str = (pd.Timestamp(hi) + pd.Timedelta(seconds=1)).isoformat()
+                    filters.append({
+                        "attr": col.name,
+                        "op": "range",
+                        "lo": lo_str,
+                        "hi": hi_str,
+                    })
+                else:
+                    lo_f = round(float(lo), 2)
+                    hi_f = round(float(hi), 2)
+                    if lo_f == hi_f:
+                        hi_f = lo_f + 0.01
+                    filters.append({
+                        "attr": col.name,
+                        "op": "range",
+                        "lo": lo_f,
+                        "hi": hi_f,
+                    })
 
         return filters
-
-    def _generate_equality(self, col_name: str, meta: dict, target_sel: float) -> dict:
-        """Pick a subset of values whose cumulative frequency is closest to target selectivity."""
-        freqs = meta["freqs"]
-        values = meta["values"]
-
-        # Sort by frequency descending
-        order = np.argsort(-freqs)
-
-        selected = []
-        cumulative = 0.0
-        for idx in order:
-            if cumulative >= target_sel:
-                break
-            selected.append(idx)
-            cumulative += freqs[idx]
-
-        # Check if adding one more value gets closer to target
-        if len(selected) < len(order):
-            next_idx = order[len(selected)]
-            if abs(cumulative + freqs[next_idx] - target_sel) < abs(cumulative - target_sel):
-                selected.append(next_idx)
-
-        # At least one value
-        if not selected:
-            selected = [order[0]]
-
-        picked = [_to_python(values[i]) for i in selected]
-
-        if len(picked) == 1:
-            return {"attr": col_name, "op": "eq", "value": picked[0]}
-        else:
-            return {"attr": col_name, "op": "in", "values": picked}
-
-    def _generate_range_numeric(self, meta: dict, target_sel: float) -> tuple:
-        """Generate a numeric range [lo, hi) covering ~target_sel fraction of data."""
-        sorted_vals = meta["sorted"]
-        n = len(sorted_vals)
-
-        # Width in quantile space
-        width = max(min(target_sel, 1.0), 1.0 / n)
-        # Random start position
-        max_start = max(1.0 - width, 0.0)
-        start = self.rng.uniform(0, max_start) if max_start > 0 else 0.0
-
-        lo_idx = int(start * (n - 1))
-        hi_idx = int((start + width) * (n - 1))
-        hi_idx = min(hi_idx, n - 1)
-
-        lo = round(float(sorted_vals[lo_idx]), 2)
-        hi = round(float(sorted_vals[hi_idx]), 2)
-        return (lo, hi)
-
-    def _generate_range_datetime(self, meta: dict, target_sel: float) -> tuple:
-        """Generate a datetime range [lo, hi) covering ~target_sel fraction of data."""
-        sorted_vals = meta["sorted"]
-        n = len(sorted_vals)
-
-        width = max(min(target_sel, 1.0), 1.0 / n)
-        max_start = max(1.0 - width, 0.0)
-        start = self.rng.uniform(0, max_start) if max_start > 0 else 0.0
-
-        lo_idx = int(start * (n - 1))
-        hi_idx = int((start + width) * (n - 1))
-        hi_idx = min(hi_idx, n - 1)
-
-        lo = pd.Timestamp(sorted_vals[lo_idx]).isoformat()
-        hi = pd.Timestamp(sorted_vals[hi_idx]).isoformat()
-        return (lo, hi)

@@ -11,11 +11,12 @@ from .config import (
     ExpandedQueryBlock,
     MixedPhase,
     PausePhase,
+    ReadOnlyPhase,
     WorkloadConfig,
     WriteOnlyPhase,
 )
 from .dataset import DatasetCursor
-from .filters import SelectivityFilterGenerator, UniformFilterGenerator
+from .filters import TwoPointFilterGenerator, UniformFilterGenerator
 from .writer import TSVWriter
 
 logger = logging.getLogger(__name__)
@@ -78,18 +79,14 @@ def _build_query_sampler(
 def _generate_read(
     block: ExpandedQueryBlock,
     uniform_gen: UniformFilterGenerator,
-    selectivity_gen: SelectivityFilterGenerator,
+    two_point_gen: TwoPointFilterGenerator,
     rng: np.random.Generator,
 ) -> dict:
     """Generate a single read filter dict from an expanded query block."""
     if block.strategy == "uniform":
-        return uniform_gen.generate(block.num_filters)
-    elif block.strategy == "selectivity":
-        return selectivity_gen.generate(
-            sigma=block.expected_selectivity,
-            k=block.query_attr_num,
-            attr_names=block.query_attrs,
-        )
+        return uniform_gen.generate(block.query_attr_num)
+    elif block.strategy == "two_point":
+        return two_point_gen.generate(block.query_attr_num)
     else:
         raise ValueError(f"Unknown strategy: {block.strategy}")
 
@@ -119,7 +116,7 @@ def execute_phases(
     config: WorkloadConfig,
     cursor: DatasetCursor,
     uniform_gen: UniformFilterGenerator,
-    selectivity_gen: SelectivityFilterGenerator,
+    two_point_gen: TwoPointFilterGenerator,
     writer: TSVWriter,
     rng: np.random.Generator,
 ) -> None:
@@ -130,8 +127,10 @@ def execute_phases(
             _run_write_only(phase, cursor, writer, rng, pk_buffer)
         elif isinstance(phase, PausePhase):
             _run_pause(phase, writer)
+        elif isinstance(phase, ReadOnlyPhase):
+            _run_read_only(phase, uniform_gen, two_point_gen, writer, rng)
         elif isinstance(phase, MixedPhase):
-            _run_mixed(phase, cursor, uniform_gen, selectivity_gen, writer, rng, pk_buffer)
+            _run_mixed(phase, cursor, uniform_gen, two_point_gen, writer, rng, pk_buffer)
 
     logger.info(
         "Generation complete: %d writes, %d updates, %d reads, %d pauses",
@@ -155,6 +154,23 @@ def _run_write_only(
         _emit_updates(phase.update_ratio, pk_buffer, cursor, writer, rng)
 
 
+def _run_read_only(
+    phase: ReadOnlyPhase,
+    uniform_gen: UniformFilterGenerator,
+    two_point_gen: TwoPointFilterGenerator,
+    writer: TSVWriter,
+    rng: np.random.Generator,
+) -> None:
+    logger.info("Phase '%s': read_only, %d reads, %d query blocks", phase.label, phase.rows, len(phase.queries))
+    probs, blocks = _build_query_sampler(phase.queries)
+    block_indices = np.arange(len(blocks))
+    for _ in range(phase.rows):
+        idx = rng.choice(block_indices, p=probs)
+        block = blocks[idx]
+        filters = _generate_read(block, uniform_gen, two_point_gen, rng)
+        writer.write_read(filters)
+
+
 def _run_pause(phase: PausePhase, writer: TSVWriter) -> None:
     logger.info("Phase '%s': pause, %s seconds", phase.label, phase.duration_seconds)
     writer.write_pause(phase.duration_seconds)
@@ -164,7 +180,7 @@ def _run_mixed(
     phase: MixedPhase,
     cursor: DatasetCursor,
     uniform_gen: UniformFilterGenerator,
-    selectivity_gen: SelectivityFilterGenerator,
+    two_point_gen: TwoPointFilterGenerator,
     writer: TSVWriter,
     rng: np.random.Generator,
     pk_buffer: PKReservoir,
@@ -199,5 +215,5 @@ def _run_mixed(
         for _ in range(num_reads):
             idx = rng.choice(block_indices, p=probs)
             block = blocks[idx]
-            filters = _generate_read(block, uniform_gen, selectivity_gen, rng)
+            filters = _generate_read(block, uniform_gen, two_point_gen, rng)
             writer.write_read(filters)

@@ -11,7 +11,7 @@ import numpy as np
 
 from .config import HonkConfigError, load_config, validate_row_budget
 from .dataset import DatasetCursor
-from .filters import SelectivityFilterGenerator, UniformFilterGenerator
+from .filters import TwoPointFilterGenerator, UniformFilterGenerator
 from .phases import execute_phases
 from .schema import ALL_COLUMNS
 from .writer import TSVWriter
@@ -92,7 +92,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     logger.info("Learning data distributions...")
     df = cursor.dataframe
     uniform_gen = UniformFilterGenerator(df, columns, rng)
-    selectivity_gen = SelectivityFilterGenerator(df, columns, rng)
+    two_point_gen = TwoPointFilterGenerator(df, columns, rng)
 
     # Execute phases
     tsv_path = os.path.join(output_dir, "workload.tsv")
@@ -100,7 +100,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     t0 = time.time()
 
     with TSVWriter(tsv_path) as writer:
-        execute_phases(config, cursor, uniform_gen, selectivity_gen, writer, rng)
+        execute_phases(config, cursor, uniform_gen, two_point_gen, writer, rng)
 
     elapsed = time.time() - t0
     logger.info("Done in %.1fs", elapsed)

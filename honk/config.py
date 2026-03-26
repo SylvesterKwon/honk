@@ -16,12 +16,9 @@ class HonkConfigError(Exception):
 @dataclass
 class ExpandedQueryBlock:
     label: str
-    strategy: str  # "selectivity" | "uniform"
+    strategy: str  # "uniform" | "two_point"
     weight: float
-    expected_selectivity: float | None = None
     query_attr_num: int | None = None
-    query_attrs: list[str] | None = None
-    num_filters: int | None = None
 
 
 @dataclass
@@ -38,6 +35,13 @@ class PausePhase:
 
 
 @dataclass
+class ReadOnlyPhase:
+    label: str
+    rows: int
+    queries: list[ExpandedQueryBlock] = field(default_factory=list)
+
+
+@dataclass
 class MixedPhase:
     label: str
     rows: int
@@ -46,7 +50,7 @@ class MixedPhase:
     queries: list[ExpandedQueryBlock] = field(default_factory=list)
 
 
-Phase = WriteOnlyPhase | PausePhase | MixedPhase
+Phase = WriteOnlyPhase | PausePhase | ReadOnlyPhase | MixedPhase
 
 
 @dataclass
@@ -67,7 +71,7 @@ class WorkloadConfig:
 
 # --- Cartesian expansion ---
 
-EXPAND_FIELDS = ("expected_selectivity", "query_attr_num")
+EXPAND_FIELDS = ("query_attr_num",)
 
 
 def _expand_queries(raw_queries: list[dict]) -> list[ExpandedQueryBlock]:
@@ -90,17 +94,12 @@ def _expand_queries(raw_queries: list[dict]) -> list[ExpandedQueryBlock]:
             else:
                 expand_params[key] = [val]
 
-        # Static params (not expanded)
-        query_attrs = q.get("query_attrs")
-        num_filters = q.get("num_filters")
-
         if not expand_params:
             result.append(ExpandedQueryBlock(
                 label=label,
                 strategy=strategy,
                 weight=weight,
-                query_attrs=query_attrs,
-                num_filters=num_filters,
+                query_attr_num=q.get("query_attr_num"),
             ))
             continue
 
@@ -111,10 +110,7 @@ def _expand_queries(raw_queries: list[dict]) -> list[ExpandedQueryBlock]:
                 label=label,
                 strategy=strategy,
                 weight=weight,
-                expected_selectivity=overrides.get("expected_selectivity"),
                 query_attr_num=overrides.get("query_attr_num"),
-                query_attrs=query_attrs,
-                num_filters=num_filters,
             ))
 
     return result
@@ -127,28 +123,15 @@ def _validate_query_block(q: dict) -> None:
     label = q.get("label", "<unnamed>")
     strategy = q.get("strategy")
 
-    if strategy not in ("selectivity", "uniform"):
+    if strategy not in ("uniform", "two_point"):
         raise HonkConfigError(
-            f"Query '{label}': unknown strategy '{strategy}', expected 'selectivity' or 'uniform'"
+            f"Query '{label}': unknown strategy '{strategy}', expected 'uniform' or 'two_point'"
         )
 
-    if strategy == "selectivity":
-        if "expected_selectivity" not in q:
-            raise HonkConfigError(
-                f"Query '{label}': selectivity strategy requires 'expected_selectivity'"
-            )
-        has_num = "query_attr_num" in q
-        has_indices = "query_attrs" in q
-        if has_num and has_indices:
-            raise HonkConfigError(
-                f"Query '{label}': query_attr_num and query_attrs are mutually exclusive"
-            )
-
-    if strategy == "uniform":
-        if "num_filters" not in q:
-            raise HonkConfigError(
-                f"Query '{label}': uniform strategy requires 'num_filters'"
-            )
+    if "query_attr_num" not in q:
+        raise HonkConfigError(
+            f"Query '{label}': 'query_attr_num' is required"
+        )
 
 
 def _parse_phase(raw: dict) -> Phase:
@@ -165,6 +148,14 @@ def _parse_phase(raw: dict) -> Phase:
 
     elif phase_type == "pause":
         return PausePhase(label=label, duration_seconds=raw["duration_seconds"])
+
+    elif phase_type == "read_only":
+        queries = _expand_queries(raw.get("queries", []))
+        return ReadOnlyPhase(
+            label=label,
+            rows=raw["rows"],
+            queries=queries,
+        )
 
     elif phase_type == "mixed":
         queries = _expand_queries(raw.get("queries", []))

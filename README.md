@@ -116,26 +116,12 @@ Output files:
 
 Defines read queries for `mixed` phases. Blocks are sampled probabilistically by `weight`.
 
-#### `selectivity` strategy — Target selectivity-based filtering
-
-```json
-{
-  "label": "sweep_sigma_k",
-  "strategy": "selectivity",
-  "expected_selectivity": [0.1, 0.01, 0.001],
-  "query_attr_num": [2, 4, 8],
-  "weight": 2
-}
-```
+All query blocks share these fields:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `expected_selectivity` | `float \| float[]` | Target selectivity (0.0–1.0). Arrays are Cartesian-expanded |
 | `query_attr_num` | `int \| int[]` | Number of random attributes to filter on. Arrays are Cartesian-expanded |
-| `query_attrs` | `string[]` | Column names to filter on (mutually exclusive with `query_attr_num`) |
 | `weight` | `float` | Sampling weight (default: 1) |
-
-When both `expected_selectivity` and `query_attr_num` are arrays, all combinations are expanded.
 
 #### `uniform` strategy — Uniform random filtering
 
@@ -143,15 +129,27 @@ When both `expected_selectivity` and `query_attr_num` are arrays, all combinatio
 {
   "label": "baseline",
   "strategy": "uniform",
-  "num_filters": 3,
+  "query_attr_num": 3,
   "weight": 1
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `num_filters` | `int` | Number of random attributes to filter on |
-| `weight` | `float` | Sampling weight (default: 1) |
+Generates filters by uniformly sampling random column values.
+
+#### `two_point` strategy — Data-driven range filtering
+
+```json
+{
+  "label": "two_point_sweep",
+  "strategy": "two_point",
+  "query_attr_num": [1, 2, 3, 4],
+  "weight": 1
+}
+```
+
+Generates queries by sampling two actual records from the dataset.
+- Categorical attributes: equality filter on one of the two sampled values
+- Continuous/datetime attributes: range filter [min(val_a, val_b), max(val_a, val_b))
 
 ## Output Format
 

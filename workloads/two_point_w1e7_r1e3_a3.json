@@ -18,23 +18,21 @@
     {
       "label": "preload",
       "type": "write_only",
-      "rows": 10000
+      "rows": 10000000
     },
     {
       "label": "stabilize",
       "type": "pause",
-      "duration_seconds": 60
+      "duration_seconds": 120
     },
     {
-      "label": "mixed",
-      "type": "mixed",
-      "rows": 100000,
-      "read_ratio": 10,
-      "update_ratio": 0.1,
+      "label": "query_k_sweep",
+      "type": "read_only",
+      "rows": 1000000,
       "queries": [
         {
-          "label": "baseline",
-          "strategy": "uniform",
+          "label": "a3",
+          "strategy": "two_point",
           "query_attr_num": 3,
           "weight": 1
         }
