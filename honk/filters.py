@@ -13,9 +13,9 @@ def _to_python(val):
     if isinstance(val, (np.floating,)):
         return float(val)
     if isinstance(val, pd.Timestamp):
-        return val.isoformat()
+        return int(val.timestamp())
     if isinstance(val, np.datetime64):
-        return pd.Timestamp(val).isoformat()
+        return int(pd.Timestamp(val).timestamp())
     return val
 
 
@@ -73,8 +73,8 @@ class UniformFilterGenerator:
                 a, b = sorted(self.rng.uniform(min_ts, max_ts, size=2))
                 filters.append({
                     "attr": col.name, "op": "range",
-                    "lo": pd.Timestamp(a, unit="s").isoformat(),
-                    "hi": pd.Timestamp(b, unit="s").isoformat(),
+                    "lo": int(a),
+                    "hi": int(b),
                 })
             else:
                 a, b = sorted(self.rng.uniform(stat["min"], stat["max"], size=2))
@@ -127,15 +127,15 @@ class TwoPointFilterGenerator:
                 lo, hi = (val_a, val_b) if val_a <= val_b else (val_b, val_a)
 
                 if col.dtype == "datetime":
-                    lo_str = pd.Timestamp(lo).isoformat()
-                    hi_str = pd.Timestamp(hi).isoformat()
-                    if lo == hi:
-                        hi_str = (pd.Timestamp(hi) + pd.Timedelta(seconds=1)).isoformat()
+                    lo_ts = int(pd.Timestamp(lo).timestamp())
+                    hi_ts = int(pd.Timestamp(hi).timestamp())
+                    if lo_ts == hi_ts:
+                        hi_ts = lo_ts + 1
                     filters.append({
                         "attr": col.name,
                         "op": "range",
-                        "lo": lo_str,
-                        "hi": hi_str,
+                        "lo": lo_ts,
+                        "hi": hi_ts,
                     })
                 else:
                     lo_f = round(float(lo), 2)

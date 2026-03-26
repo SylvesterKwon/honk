@@ -11,7 +11,7 @@ import pandas as pd
 def _json_default(obj: Any) -> Any:
     """JSON serialization helper for pandas/numpy types."""
     if isinstance(obj, pd.Timestamp):
-        return obj.isoformat()
+        return int(obj.timestamp())
     if isinstance(obj, (np.integer,)):
         return int(obj)
     if isinstance(obj, (np.floating,)):
