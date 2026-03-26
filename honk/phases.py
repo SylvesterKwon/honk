@@ -1,5 +1,6 @@
 """Phase execution orchestration."""
 
+import json
 import logging
 import math
 import uuid
@@ -138,6 +139,9 @@ def execute_phases(
     )
 
 
+_WRITE_CHUNK = 100_000
+
+
 def _run_write_only(
     phase: WriteOnlyPhase,
     cursor: DatasetCursor,
@@ -147,11 +151,42 @@ def _run_write_only(
 ) -> None:
     logger.info("Phase '%s': write_only, %d rows, update_ratio=%.2f", phase.label, phase.rows, phase.update_ratio)
     chunk = cursor.consume(phase.rows)
-    for _, row in chunk.iterrows():
-        pk = _make_uuid(rng)
-        writer.write_row(pk, _row_to_dict(row))
-        pk_buffer.append(pk, rng)
-        _emit_updates(phase.update_ratio, pk_buffer, cursor, writer, rng)
+
+    if phase.update_ratio > 0:
+        # Row-by-row path: interleaved updates require sequential processing
+        records = chunk.to_dict("records")
+        for record in records:
+            pk = _make_uuid(rng)
+            writer.write_row(pk, record)
+            pk_buffer.append(pk, rng)
+            _emit_updates(phase.update_ratio, pk_buffer, cursor, writer, rng)
+        return
+
+    # Fast path: batch processing (no interleaved updates)
+    n = len(chunk)
+    for start in range(0, n, _WRITE_CHUNK):
+        end = min(start + _WRITE_CHUNK, n)
+        sub = chunk.iloc[start:end]
+        batch_n = end - start
+
+        # Batch UUID generation
+        raw = rng.bytes(16 * batch_n)
+        pks = [uuid.UUID(bytes=raw[i * 16 : (i + 1) * 16], version=4) for i in range(batch_n)]
+
+        # Vectorized JSON serialization via pandas C implementation
+        json_lines = sub.to_json(
+            orient="records", lines=True, date_unit="s", force_ascii=False,
+        ).split("\n")
+        if json_lines and json_lines[-1] == "":
+            json_lines.pop()
+
+        # Build and write output block
+        buf = "".join(f"w\t{pk}\t{jl}\n" for pk, jl in zip(pks, json_lines))
+        writer.write_block(buf, writes=batch_n)
+
+        # Feed reservoir
+        for pk in pks:
+            pk_buffer.append(pk, rng)
 
 
 def _run_read_only(
@@ -164,8 +199,9 @@ def _run_read_only(
     logger.info("Phase '%s': read_only, %d reads, %d query blocks", phase.label, phase.rows, len(phase.queries))
     probs, blocks = _build_query_sampler(phase.queries)
     block_indices = np.arange(len(blocks))
-    for _ in range(phase.rows):
-        idx = rng.choice(block_indices, p=probs)
+    # Pre-sample all block selections at once (avoids per-iteration rng.choice overhead)
+    sampled = rng.choice(block_indices, p=probs, size=phase.rows)
+    for idx in sampled:
         block = blocks[idx]
         filters = _generate_read(block, uniform_gen, two_point_gen, rng)
         writer.write_read(filters)
@@ -197,10 +233,11 @@ def _run_mixed(
     frac_part = phase.read_ratio - int_part
 
     chunk = cursor.consume(phase.rows)
-    for _, row in chunk.iterrows():
+    records = chunk.to_dict("records")
+    for record in records:
         # Write
         pk = _make_uuid(rng)
-        writer.write_row(pk, _row_to_dict(row))
+        writer.write_row(pk, record)
         pk_buffer.append(pk, rng)
 
         # Updates

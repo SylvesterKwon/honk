@@ -92,28 +92,38 @@ class TwoPointFilterGenerator:
     def __init__(self, df: pd.DataFrame, columns: list[Column], rng: np.random.Generator):
         self.rng = rng
         self.columns = columns
-        self.df = df
+        self.n_rows = len(df)
         self.available_columns = [c for c in columns if c.name in df.columns]
+
+        # Pre-extract column values as numpy arrays for O(1) random access
+        # (avoids df.iloc which creates a full Series per call)
+        self._values: dict[str, np.ndarray] = {}
+        self._isna: dict[str, np.ndarray] = {}
+        for c in self.available_columns:
+            arr = df[c.name].to_numpy()
+            self._values[c.name] = arr
+            self._isna[c.name] = pd.isna(arr)
 
     def generate(self, query_attr_num: int) -> list[dict]:
         """Pick k random attributes, sample 2 records, build filters from their values."""
         k = min(query_attr_num, len(self.available_columns))
         chosen_cols = list(self.rng.choice(self.available_columns, size=k, replace=False))
 
-        indices = self.rng.choice(len(self.df), size=2, replace=False)
-        row_a = self.df.iloc[indices[0]]
-        row_b = self.df.iloc[indices[1]]
+        indices = self.rng.choice(self.n_rows, size=2, replace=False)
+        i_a, i_b = int(indices[0]), int(indices[1])
 
         filters = []
         for col in chosen_cols:
-            val_a = row_a[col.name]
-            val_b = row_b[col.name]
+            val_a = self._values[col.name][i_a]
+            val_b = self._values[col.name][i_b]
+            na_a = self._isna[col.name][i_a]
+            na_b = self._isna[col.name][i_b]
 
-            if pd.isna(val_a) and pd.isna(val_b):
+            if na_a and na_b:
                 continue
-            if pd.isna(val_a):
+            if na_a:
                 val_a = val_b
-            if pd.isna(val_b):
+            if na_b:
                 val_b = val_a
 
             if col.filter_type == FilterType.EQUALITY:

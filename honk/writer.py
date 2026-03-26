@@ -25,7 +25,7 @@ class TSVWriter:
     """Writes workload operations to a TSV file."""
 
     def __init__(self, path: str):
-        self._f: IO[str] = open(path, "w")
+        self._f: IO[str] = open(path, "w", buffering=8 * 1024 * 1024)
         self.writes = 0
         self.reads = 0
         self.updates = 0
@@ -45,6 +45,13 @@ class TSVWriter:
         filter_json = json.dumps({"filters": filters}, ensure_ascii=False)
         self._f.write(f"r\t{filter_json}\n")
         self.reads += 1
+
+    def write_block(self, data: str, writes: int = 0, reads: int = 0, updates: int = 0) -> None:
+        """Write a pre-formatted block and update counters."""
+        self._f.write(data)
+        self.writes += writes
+        self.reads += reads
+        self.updates += updates
 
     def write_pause(self, seconds: float) -> None:
         self._f.write(f"p\t{seconds}\n")
