@@ -88,7 +88,7 @@ def _generate_read(
         return selectivity_gen.generate(
             sigma=block.expected_selectivity,
             k=block.query_attr_num,
-            attr_indices=block.query_attr_indices,
+            attr_names=block.query_attrs,
         )
     else:
         raise ValueError(f"Unknown strategy: {block.strategy}")

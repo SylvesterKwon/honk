@@ -132,7 +132,7 @@ Defines read queries for `mixed` phases. Blocks are sampled probabilistically by
 |-------|------|-------------|
 | `expected_selectivity` | `float \| float[]` | Target selectivity (0.0–1.0). Arrays are Cartesian-expanded |
 | `query_attr_num` | `int \| int[]` | Number of random attributes to filter on. Arrays are Cartesian-expanded |
-| `query_attr_indices` | `int[]` | Fixed column indices to filter on (mutually exclusive with `query_attr_num`) |
+| `query_attrs` | `string[]` | Column names to filter on (mutually exclusive with `query_attr_num`) |
 | `weight` | `float` | Sampling weight (default: 1) |
 
 When both `expected_selectivity` and `query_attr_num` are arrays, all combinations are expanded.

@@ -55,11 +55,11 @@
             0.01,
             0.001
           ],
-          "query_attr_indices": [
-            4,
-            5,
-            7,
-            8
+          "query_attrs": [
+            "trip_distance",
+            "RatecodeID",
+            "PULocationID",
+            "DOLocationID"
           ],
           "weight": 2
         },

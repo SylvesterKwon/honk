@@ -20,7 +20,7 @@ class ExpandedQueryBlock:
     weight: float
     expected_selectivity: float | None = None
     query_attr_num: int | None = None
-    query_attr_indices: list[int] | None = None
+    query_attrs: list[str] | None = None
     num_filters: int | None = None
 
 
@@ -91,7 +91,7 @@ def _expand_queries(raw_queries: list[dict]) -> list[ExpandedQueryBlock]:
                 expand_params[key] = [val]
 
         # Static params (not expanded)
-        query_attr_indices = q.get("query_attr_indices")
+        query_attrs = q.get("query_attrs")
         num_filters = q.get("num_filters")
 
         if not expand_params:
@@ -99,7 +99,7 @@ def _expand_queries(raw_queries: list[dict]) -> list[ExpandedQueryBlock]:
                 label=label,
                 strategy=strategy,
                 weight=weight,
-                query_attr_indices=query_attr_indices,
+                query_attrs=query_attrs,
                 num_filters=num_filters,
             ))
             continue
@@ -113,7 +113,7 @@ def _expand_queries(raw_queries: list[dict]) -> list[ExpandedQueryBlock]:
                 weight=weight,
                 expected_selectivity=overrides.get("expected_selectivity"),
                 query_attr_num=overrides.get("query_attr_num"),
-                query_attr_indices=query_attr_indices,
+                query_attrs=query_attrs,
                 num_filters=num_filters,
             ))
 
@@ -138,10 +138,10 @@ def _validate_query_block(q: dict) -> None:
                 f"Query '{label}': selectivity strategy requires 'expected_selectivity'"
             )
         has_num = "query_attr_num" in q
-        has_indices = "query_attr_indices" in q
+        has_indices = "query_attrs" in q
         if has_num and has_indices:
             raise HonkConfigError(
-                f"Query '{label}': query_attr_num and query_attr_indices are mutually exclusive"
+                f"Query '{label}': query_attr_num and query_attrs are mutually exclusive"
             )
 
     if strategy == "uniform":

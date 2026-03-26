@@ -129,24 +129,25 @@ class SelectivityFilterGenerator:
         self,
         sigma: float,
         k: int | None = None,
-        attr_indices: list[int] | None = None,
+        attr_names: list[str] | None = None,
     ) -> list[dict]:
         """Generate a filter with expected selectivity sigma.
 
         Args:
             sigma: Target overall selectivity (fraction of rows matching).
-            k: Number of attributes to use (randomly chosen). Mutually exclusive with attr_indices.
-            attr_indices: Specific column indices (0-based) to use.
+            k: Number of attributes to use (randomly chosen). Mutually exclusive with attr_names.
+            attr_names: Specific column names to use.
         """
         available = [c for c in self.columns if c.name in self.col_meta]
 
-        if attr_indices is not None:
-            chosen = [available[i] for i in attr_indices if i < len(available)]
+        if attr_names is not None:
+            available_map = {c.name: c for c in available}
+            chosen = [available_map[n] for n in attr_names if n in available_map]
         elif k is not None:
             num = min(k, len(available))
             chosen = list(self.rng.choice(available, size=num, replace=False))
         else:
-            raise ValueError("Either k or attr_indices must be provided")
+            raise ValueError("Either k or attr_names must be provided")
 
         if not chosen:
             return []
@@ -159,7 +160,7 @@ class SelectivityFilterGenerator:
             meta = self.col_meta[col.name]
 
             if meta["type"] == "equality":
-                filters.append({"attr": col.name, "op": "eq", "value": self._generate_equality(meta, per_attr_sel)})
+                filters.append(self._generate_equality(col.name, meta, per_attr_sel))
             elif meta["dtype"] == "datetime":
                 lo, hi = self._generate_range_datetime(meta, per_attr_sel)
                 filters.append({"attr": col.name, "op": "range", "lo": lo, "hi": hi})
@@ -169,13 +170,38 @@ class SelectivityFilterGenerator:
 
         return filters
 
-    def _generate_equality(self, meta: dict, target_sel: float):
-        """Pick the value whose frequency is closest to target selectivity."""
+    def _generate_equality(self, col_name: str, meta: dict, target_sel: float) -> dict:
+        """Pick a subset of values whose cumulative frequency is closest to target selectivity."""
         freqs = meta["freqs"]
         values = meta["values"]
-        # Find value with frequency closest to target_sel
-        idx = int(np.argmin(np.abs(freqs - target_sel)))
-        return _to_python(values[idx])
+
+        # Sort by frequency descending
+        order = np.argsort(-freqs)
+
+        selected = []
+        cumulative = 0.0
+        for idx in order:
+            if cumulative >= target_sel:
+                break
+            selected.append(idx)
+            cumulative += freqs[idx]
+
+        # Check if adding one more value gets closer to target
+        if len(selected) < len(order):
+            next_idx = order[len(selected)]
+            if abs(cumulative + freqs[next_idx] - target_sel) < abs(cumulative - target_sel):
+                selected.append(next_idx)
+
+        # At least one value
+        if not selected:
+            selected = [order[0]]
+
+        picked = [_to_python(values[i]) for i in selected]
+
+        if len(picked) == 1:
+            return {"attr": col_name, "op": "eq", "value": picked[0]}
+        else:
+            return {"attr": col_name, "op": "in", "values": picked}
 
     def _generate_range_numeric(self, meta: dict, target_sel: float) -> tuple:
         """Generate a numeric range [lo, hi) covering ~target_sel fraction of data."""
