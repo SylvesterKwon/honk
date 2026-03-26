@@ -1,0 +1,74 @@
+{
+  "dataset": [
+    "yellow_tripdata_2025-01.parquet",
+    "yellow_tripdata_2025-02.parquet",
+    "yellow_tripdata_2025-03.parquet",
+    "yellow_tripdata_2025-04.parquet",
+    "yellow_tripdata_2025-05.parquet",
+    "yellow_tripdata_2025-06.parquet",
+    "yellow_tripdata_2025-07.parquet",
+    "yellow_tripdata_2025-08.parquet",
+    "yellow_tripdata_2025-09.parquet",
+    "yellow_tripdata_2025-10.parquet",
+    "yellow_tripdata_2025-11.parquet",
+    "yellow_tripdata_2025-12.parquet"
+  ],
+  "seed": 42,
+  "phases": [
+    {
+      "label": "preload",
+      "type": "write_only",
+      "rows": 10000
+    },
+    {
+      "label": "stabilize",
+      "type": "pause",
+      "duration_seconds": 60
+    },
+    {
+      "label": "mixed",
+      "type": "mixed",
+      "rows": 100000,
+      "read_ratio": 10,
+      "queries": [
+        {
+          "label": "sweep_sigma_k",
+          "strategy": "selectivity",
+          "expected_selectivity": [
+            0.1,
+            0.01,
+            0.001,
+            0.0001
+          ],
+          "query_attr_num": [
+            2,
+            4,
+            8
+          ],
+          "weight": 2
+        },
+        {
+          "label": "fixed_attrs",
+          "strategy": "selectivity",
+          "expected_selectivity": [
+            0.01,
+            0.001
+          ],
+          "query_attr_indices": [
+            4,
+            5,
+            7,
+            8
+          ],
+          "weight": 2
+        },
+        {
+          "label": "baseline",
+          "strategy": "uniform",
+          "num_filters": 3,
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}
