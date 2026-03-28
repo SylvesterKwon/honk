@@ -24,7 +24,7 @@ class ExpandedQueryBlock:
 @dataclass
 class WriteOnlyPhase:
     label: str
-    rows: int
+    rows: int | None = None
     update_ratio: float = 0.0
 
 
@@ -37,15 +37,15 @@ class PausePhase:
 @dataclass
 class ReadOnlyPhase:
     label: str
-    rows: int
+    rows: int | None = None
     queries: list[ExpandedQueryBlock] = field(default_factory=list)
 
 
 @dataclass
 class MixedPhase:
     label: str
-    rows: int
-    read_ratio: float
+    rows: int | None = None
+    read_ratio: float = 0.0
     update_ratio: float = 0.0
     queries: list[ExpandedQueryBlock] = field(default_factory=list)
 
@@ -142,7 +142,7 @@ def _parse_phase(raw: dict) -> Phase:
     if phase_type == "write_only":
         return WriteOnlyPhase(
             label=label,
-            rows=raw["rows"],
+            rows=raw.get("rows"),
             update_ratio=raw.get("update_ratio", 0.0),
         )
 
@@ -153,7 +153,7 @@ def _parse_phase(raw: dict) -> Phase:
         queries = _expand_queries(raw.get("queries", []))
         return ReadOnlyPhase(
             label=label,
-            rows=raw["rows"],
+            rows=raw.get("rows"),
             queries=queries,
         )
 
@@ -161,8 +161,8 @@ def _parse_phase(raw: dict) -> Phase:
         queries = _expand_queries(raw.get("queries", []))
         return MixedPhase(
             label=label,
-            rows=raw["rows"],
-            read_ratio=raw["read_ratio"],
+            rows=raw.get("rows"),
+            read_ratio=raw.get("read_ratio", 0.0),
             update_ratio=raw.get("update_ratio", 0.0),
             queries=queries,
         )
@@ -184,6 +184,13 @@ def load_config(path: str) -> WorkloadConfig:
     phases = [_parse_phase(p) for p in raw.get("phases", [])]
 
     return WorkloadConfig(dataset=dataset, seed=seed, phases=phases)
+
+
+def resolve_rows(config: WorkloadConfig, available_rows: int) -> None:
+    """Fill in None rows with available_rows (entire dataset)."""
+    for p in config.phases:
+        if isinstance(p, (WriteOnlyPhase, ReadOnlyPhase, MixedPhase)) and p.rows is None:
+            p.rows = available_rows
 
 
 def validate_row_budget(config: WorkloadConfig, available_rows: int) -> None:

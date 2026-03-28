@@ -9,7 +9,7 @@ import time
 
 import numpy as np
 
-from .config import HonkConfigError, load_config, validate_row_budget
+from .config import HonkConfigError, load_config, resolve_rows, validate_row_budget
 from .dataset import DatasetCursor
 from .filters import TwoPointFilterGenerator, UniformFilterGenerator
 from .phases import execute_phases
@@ -77,6 +77,9 @@ def cmd_run(args: argparse.Namespace) -> None:
     t0 = time.time()
     cursor = DatasetCursor(file_paths)
     logger.info("Loaded %d rows in %.1fs", cursor.total_rows, time.time() - t0)
+
+    # Resolve unspecified rows to full dataset size
+    resolve_rows(config, cursor.total_rows)
 
     # Validate row budget
     try:
