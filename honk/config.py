@@ -37,7 +37,7 @@ class PausePhase:
 @dataclass
 class ReadOnlyPhase:
     label: str
-    rows: int | None = None
+    num_queries: int | None = None
     queries: list[ExpandedQueryBlock] = field(default_factory=list)
 
 
@@ -153,7 +153,7 @@ def _parse_phase(raw: dict) -> Phase:
         queries = _expand_queries(raw.get("queries", []))
         return ReadOnlyPhase(
             label=label,
-            rows=raw.get("rows"),
+            num_queries=raw.get("num_queries"),
             queries=queries,
         )
 
@@ -189,8 +189,10 @@ def load_config(path: str) -> WorkloadConfig:
 def resolve_rows(config: WorkloadConfig, available_rows: int) -> None:
     """Fill in None rows with available_rows (entire dataset)."""
     for p in config.phases:
-        if isinstance(p, (WriteOnlyPhase, ReadOnlyPhase, MixedPhase)) and p.rows is None:
+        if isinstance(p, (WriteOnlyPhase, MixedPhase)) and p.rows is None:
             p.rows = available_rows
+        if isinstance(p, ReadOnlyPhase) and p.num_queries is None:
+            p.num_queries = available_rows
 
 
 def validate_row_budget(config: WorkloadConfig, available_rows: int) -> None:

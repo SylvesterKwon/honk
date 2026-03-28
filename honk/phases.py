@@ -196,11 +196,11 @@ def _run_read_only(
     writer: TSVWriter,
     rng: np.random.Generator,
 ) -> None:
-    logger.info("Phase '%s': read_only, %d reads, %d query blocks", phase.label, phase.rows, len(phase.queries))
+    logger.info("Phase '%s': read_only, %d reads, %d query blocks", phase.label, phase.num_queries, len(phase.queries))
     probs, blocks = _build_query_sampler(phase.queries)
     block_indices = np.arange(len(blocks))
     # Pre-sample all block selections at once (avoids per-iteration rng.choice overhead)
-    sampled = rng.choice(block_indices, p=probs, size=phase.rows)
+    sampled = rng.choice(block_indices, p=probs, size=phase.num_queries)
     for idx in sampled:
         block = blocks[idx]
         filters = _generate_read(block, uniform_gen, two_point_gen, rng)
