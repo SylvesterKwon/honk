@@ -2,7 +2,7 @@
 
 Multi-attribute filtering query benchmark workload generator using NYC Yellow Taxi data.
 
-Generates realistic OLTP workloads (write, update, read) targeting KV storage systems.
+Generates workloads (write, update, read) for key-value store.
 
 ## Setup
 
