@@ -41,8 +41,11 @@ class TSVWriter:
         self._f.write(f"u\t{pk}\t{record_json}\n")
         self.updates += 1
 
-    def write_read(self, filters: list[dict]) -> None:
-        filter_json = json.dumps({"filters": filters}, ensure_ascii=False)
+    def write_read(self, filters: list[dict], most_selective_attr: str | None = None) -> None:
+        obj: dict = {"filters": filters}
+        if most_selective_attr is not None:
+            obj["most_selective_attr"] = most_selective_attr
+        filter_json = json.dumps(obj, ensure_ascii=False)
         self._f.write(f"r\t{filter_json}\n")
         self.reads += 1
 

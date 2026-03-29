@@ -167,3 +167,40 @@ class TwoPointFilterGenerator:
                     })
 
         return filters
+
+
+def compute_most_selective_attr(
+    filters: list[dict],
+    df: pd.DataFrame,
+) -> str | None:
+    """Return the attribute name whose filter matches the fewest rows (most selective).
+
+    Returns ``None`` when there are fewer than 2 filters (no choice to make).
+    """
+    if len(filters) < 2:
+        return None
+
+    best_attr: str | None = None
+    best_count = len(df) + 1
+
+    for f in filters:
+        attr = f["attr"]
+        op = f["op"]
+        if op == "eq":
+            count = int((df[attr] == f["value"]).sum())
+        elif op == "in":
+            count = int(df[attr].isin(f["values"]).sum())
+        elif op == "range":
+            lo, hi = f["lo"], f["hi"]
+            if pd.api.types.is_datetime64_any_dtype(df[attr]):
+                lo = pd.Timestamp(lo, unit="s")
+                hi = pd.Timestamp(hi, unit="s")
+            count = int(((df[attr] >= lo) & (df[attr] < hi)).sum())
+        else:
+            continue
+
+        if count < best_count:
+            best_count = count
+            best_attr = attr
+
+    return best_attr

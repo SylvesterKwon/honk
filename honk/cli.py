@@ -103,7 +103,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     t0 = time.time()
 
     with TSVWriter(tsv_path) as writer:
-        execute_phases(config, cursor, uniform_gen, two_point_gen, writer, rng)
+        execute_phases(config, cursor, uniform_gen, two_point_gen, writer, rng, df)
 
     elapsed = time.time() - t0
     logger.info("Done in %.1fs", elapsed)
