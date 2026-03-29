@@ -67,13 +67,15 @@
       "name": "PULocationID",
       "description": "TLC Taxi Zone in which the taximeter was engaged.",
       "type": "int",
-      "cardinality": "medium"
+      "cardinality": "medium",
+      "codes": {}
     },
     {
       "name": "DOLocationID",
       "description": "TLC Taxi Zone in which the taximeter was disengaged.",
       "type": "int",
-      "cardinality": "medium"
+      "cardinality": "medium",
+      "codes": {}
     },
     {
       "name": "payment_type",
