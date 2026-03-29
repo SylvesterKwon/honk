@@ -19,6 +19,7 @@ class ExpandedQueryBlock:
     strategy: str  # "uniform" | "two_point"
     weight: float
     query_attr_num: int | None = None
+    query_attrs: list[str] | None = None
 
 
 @dataclass
@@ -82,6 +83,7 @@ def _expand_queries(raw_queries: list[dict]) -> list[ExpandedQueryBlock]:
         label = q["label"]
         strategy = q["strategy"]
         weight = q.get("weight", 1)
+        query_attrs = q.get("query_attrs")
 
         # Identify list-valued expansion params
         expand_params: dict[str, list] = {}
@@ -100,6 +102,7 @@ def _expand_queries(raw_queries: list[dict]) -> list[ExpandedQueryBlock]:
                 strategy=strategy,
                 weight=weight,
                 query_attr_num=q.get("query_attr_num"),
+                query_attrs=query_attrs,
             ))
             continue
 
@@ -111,6 +114,7 @@ def _expand_queries(raw_queries: list[dict]) -> list[ExpandedQueryBlock]:
                 strategy=strategy,
                 weight=weight,
                 query_attr_num=overrides.get("query_attr_num"),
+                query_attrs=query_attrs,
             ))
 
     return result
@@ -132,6 +136,19 @@ def _validate_query_block(q: dict) -> None:
         raise HonkConfigError(
             f"Query '{label}': 'query_attr_num' is required"
         )
+
+    query_attrs = q.get("query_attrs")
+    if query_attrs is not None:
+        if not isinstance(query_attrs, list) or not all(isinstance(c, str) for c in query_attrs):
+            raise HonkConfigError(
+                f"Query '{label}': 'query_attrs' must be a list of column name strings"
+            )
+        from .schema import ALL_COLUMN_NAMES
+        unknown = set(query_attrs) - set(ALL_COLUMN_NAMES)
+        if unknown:
+            raise HonkConfigError(
+                f"Query '{label}': unknown query_attrs: {unknown}"
+            )
 
 
 def _parse_phase(raw: dict) -> Phase:

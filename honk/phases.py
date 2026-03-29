@@ -85,9 +85,9 @@ def _generate_read(
 ) -> dict:
     """Generate a single read filter dict from an expanded query block."""
     if block.strategy == "uniform":
-        return uniform_gen.generate(block.query_attr_num)
+        return uniform_gen.generate(block.query_attr_num, block.query_attrs)
     elif block.strategy == "two_point":
-        return two_point_gen.generate(block.query_attr_num)
+        return two_point_gen.generate(block.query_attr_num, block.query_attrs)
     else:
         raise ValueError(f"Unknown strategy: {block.strategy}")
 

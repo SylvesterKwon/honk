@@ -55,9 +55,12 @@ class UniformFilterGenerator:
                         "max": float(series.max()),
                     }
 
-    def generate(self, query_attr_num: int) -> list[dict]:
+    def generate(self, query_attr_num: int, query_attrs: list[str] | None = None) -> list[dict]:
         """Generate a filter with query_attr_num random attributes."""
         available = [c for c in self.columns if c.name in self.stats]
+        if query_attrs is not None:
+            attr_set = set(query_attrs)
+            available = [c for c in available if c.name in attr_set]
         k = min(query_attr_num, len(available))
         chosen = self.rng.choice(available, size=k, replace=False)
 
@@ -104,10 +107,14 @@ class TwoPointFilterGenerator:
             self._values[c.name] = arr
             self._isna[c.name] = pd.isna(arr)
 
-    def generate(self, query_attr_num: int) -> list[dict]:
+    def generate(self, query_attr_num: int, query_attrs: list[str] | None = None) -> list[dict]:
         """Pick k random attributes, sample 2 records, build filters from their values."""
-        k = min(query_attr_num, len(self.available_columns))
-        chosen_cols = list(self.rng.choice(self.available_columns, size=k, replace=False))
+        pool = self.available_columns
+        if query_attrs is not None:
+            attr_set = set(query_attrs)
+            pool = [c for c in pool if c.name in attr_set]
+        k = min(query_attr_num, len(pool))
+        chosen_cols = list(self.rng.choice(pool, size=k, replace=False))
 
         indices = self.rng.choice(self.n_rows, size=2, replace=False)
         i_a, i_b = int(indices[0]), int(indices[1])
