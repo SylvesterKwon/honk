@@ -16,21 +16,25 @@
   "seed": 42,
   "phases": [
     {
-      "label": "read_k3",
+      "label": "read_sel0.0001_k1",
       "type": "read_only",
       "num_queries": 100,
       "queries": [
         {
-          "label": "k3",
-          "strategy": "two_point",
-          "query_attr_num": 3,
+          "label": "sel0.0001_k1",
+          "strategy": "guided_two_point",
+          "query_attr_num": 1,
           "weight": 1,
           "query_attrs": [
             "payment_type",
             "PULocationID",
             "fare_amount",
             "tpep_pickup_datetime"
-          ]
+          ],
+          "target_selectivity_percent": {
+            "lo": 0.001,
+            "hi": 0.01
+          }
         }
       ]
     }

@@ -16,27 +16,25 @@
   "seed": 42,
   "phases": [
     {
-      "label": "preload",
-      "type": "write_only",
-      "rows": 10000
-    },
-    {
-      "label": "stabilize",
-      "type": "pause",
-      "duration_seconds": 60
-    },
-    {
-      "label": "mixed",
-      "type": "mixed",
-      "rows": 100000,
-      "read_ratio": 10,
-      "update_ratio": 0.1,
+      "label": "read_sel0.001_k3",
+      "type": "read_only",
+      "num_queries": 100,
       "queries": [
         {
-          "label": "baseline",
-          "strategy": "uniform",
+          "label": "sel0.001_k3",
+          "strategy": "guided_two_point",
           "query_attr_num": 3,
-          "weight": 1
+          "weight": 1,
+          "query_attrs": [
+            "payment_type",
+            "PULocationID",
+            "fare_amount",
+            "tpep_pickup_datetime"
+          ],
+          "target_selectivity_percent": {
+            "lo": 0.01,
+            "hi": 0.1
+          }
         }
       ]
     }
