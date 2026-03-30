@@ -17,7 +17,8 @@ from .config import (
     WriteOnlyPhase,
 )
 from .dataset import DatasetCursor
-from .filters import TwoPointFilterGenerator, UniformFilterGenerator, compute_most_selective_attr
+from .config import HonkConfigError
+from .filters import GuidedTwoPointFilterGenerator, TwoPointFilterGenerator, UniformFilterGenerator, compute_most_selective_attr, compute_selectivity_percent
 from .writer import TSVWriter
 
 logger = logging.getLogger(__name__)
@@ -77,21 +78,48 @@ def _build_query_sampler(
     return probs, queries
 
 
+_MAX_SELECTIVITY_RETRIES = 1000
+
+
 def _generate_read(
     block: ExpandedQueryBlock,
     uniform_gen: UniformFilterGenerator,
     two_point_gen: TwoPointFilterGenerator,
+    guided_gen: GuidedTwoPointFilterGenerator,
     rng: np.random.Generator,
     df: pd.DataFrame,
 ) -> tuple[list[dict], str | None]:
     """Generate a single read filter list and its most-selective attribute hint."""
-    if block.strategy == "uniform":
-        filters = uniform_gen.generate(block.query_attr_num, block.query_attrs)
-    elif block.strategy == "two_point":
-        filters = two_point_gen.generate(block.query_attr_num, block.query_attrs)
-    else:
-        raise ValueError(f"Unknown strategy: {block.strategy}")
-    return filters, compute_most_selective_attr(filters, df)
+
+    def _gen_filters() -> list[dict]:
+        if block.strategy == "uniform":
+            return uniform_gen.generate(block.query_attr_num, block.query_attrs)
+        elif block.strategy == "two_point":
+            return two_point_gen.generate(block.query_attr_num, block.query_attrs)
+        elif block.strategy == "guided_two_point":
+            return guided_gen.generate(
+                block.query_attr_num, block.query_attrs,
+                block.target_selectivity_percent,
+            )
+        else:
+            raise ValueError(f"Unknown strategy: {block.strategy}")
+
+    tsp = block.target_selectivity_percent
+    if tsp is None:
+        filters = _gen_filters()
+        return filters, compute_most_selective_attr(filters, df)
+
+    lo, hi = tsp["lo"], tsp["hi"]
+    for _ in range(_MAX_SELECTIVITY_RETRIES):
+        filters = _gen_filters()
+        sel = compute_selectivity_percent(filters, df)
+        if lo <= sel < hi:
+            return filters, compute_most_selective_attr(filters, df)
+
+    raise HonkConfigError(
+        f"Query '{block.label}': failed to generate filters with selectivity in "
+        f"[{lo}, {hi}]% after {_MAX_SELECTIVITY_RETRIES} retries"
+    )
 
 
 def _emit_updates(
@@ -120,6 +148,7 @@ def execute_phases(
     cursor: DatasetCursor,
     uniform_gen: UniformFilterGenerator,
     two_point_gen: TwoPointFilterGenerator,
+    guided_gen: GuidedTwoPointFilterGenerator,
     writer: TSVWriter,
     rng: np.random.Generator,
     df: pd.DataFrame,
@@ -132,9 +161,9 @@ def execute_phases(
         elif isinstance(phase, PausePhase):
             _run_pause(phase, writer)
         elif isinstance(phase, ReadOnlyPhase):
-            _run_read_only(phase, uniform_gen, two_point_gen, writer, rng, df)
+            _run_read_only(phase, uniform_gen, two_point_gen, guided_gen, writer, rng, df)
         elif isinstance(phase, MixedPhase):
-            _run_mixed(phase, cursor, uniform_gen, two_point_gen, writer, rng, pk_buffer, df)
+            _run_mixed(phase, cursor, uniform_gen, two_point_gen, guided_gen, writer, rng, pk_buffer, df)
 
     logger.info(
         "Generation complete: %d writes, %d updates, %d reads, %d pauses",
@@ -196,6 +225,7 @@ def _run_read_only(
     phase: ReadOnlyPhase,
     uniform_gen: UniformFilterGenerator,
     two_point_gen: TwoPointFilterGenerator,
+    guided_gen: GuidedTwoPointFilterGenerator,
     writer: TSVWriter,
     rng: np.random.Generator,
     df: pd.DataFrame,
@@ -207,7 +237,7 @@ def _run_read_only(
     sampled = rng.choice(block_indices, p=probs, size=phase.num_queries)
     for idx in sampled:
         block = blocks[idx]
-        filters, most_selective = _generate_read(block, uniform_gen, two_point_gen, rng, df)
+        filters, most_selective = _generate_read(block, uniform_gen, two_point_gen, guided_gen, rng, df)
         writer.write_read(filters, most_selective)
 
 
@@ -221,6 +251,7 @@ def _run_mixed(
     cursor: DatasetCursor,
     uniform_gen: UniformFilterGenerator,
     two_point_gen: TwoPointFilterGenerator,
+    guided_gen: GuidedTwoPointFilterGenerator,
     writer: TSVWriter,
     rng: np.random.Generator,
     pk_buffer: PKReservoir,
@@ -257,5 +288,5 @@ def _run_mixed(
         for _ in range(num_reads):
             idx = rng.choice(block_indices, p=probs)
             block = blocks[idx]
-            filters, most_selective = _generate_read(block, uniform_gen, two_point_gen, rng, df)
+            filters, most_selective = _generate_read(block, uniform_gen, two_point_gen, guided_gen, rng, df)
             writer.write_read(filters, most_selective)

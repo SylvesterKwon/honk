@@ -3,7 +3,6 @@
 import argparse
 import logging
 import os
-import shutil
 import sys
 import time
 
@@ -11,7 +10,7 @@ import numpy as np
 
 from .config import HonkConfigError, load_config, resolve_rows, validate_row_budget
 from .dataset import DatasetCursor
-from .filters import TwoPointFilterGenerator, UniformFilterGenerator
+from .filters import GuidedTwoPointFilterGenerator, TwoPointFilterGenerator, UniformFilterGenerator
 from .phases import execute_phases
 from .schema import ALL_COLUMNS
 from .writer import TSVWriter
@@ -51,17 +50,15 @@ def cmd_run(args: argparse.Namespace) -> None:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
+    # Derive output basename from config filename
+    config_stem = os.path.splitext(os.path.basename(config_path))[0]
+
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
 
     # Setup logging
-    log_path = os.path.join(output_dir, "honk.log")
+    log_path = os.path.join(output_dir, f"{config_stem}.log")
     _setup_logging(log_path)
-
-    # Copy config for reproducibility
-    config_copy_path = os.path.join(output_dir, "workload.json")
-    shutil.copy2(config_path, config_copy_path)
-    logger.info("Config copied to %s", config_copy_path)
 
     # Resolve dataset file paths
     file_paths = []
@@ -96,14 +93,15 @@ def cmd_run(args: argparse.Namespace) -> None:
     df = cursor.dataframe
     uniform_gen = UniformFilterGenerator(df, columns, rng)
     two_point_gen = TwoPointFilterGenerator(df, columns, rng)
+    guided_gen = GuidedTwoPointFilterGenerator(df, columns, rng)
 
     # Execute phases
-    tsv_path = os.path.join(output_dir, "workload.tsv")
+    tsv_path = os.path.join(output_dir, f"{config_stem}.tsv")
     logger.info("Generating workload → %s", tsv_path)
     t0 = time.time()
 
     with TSVWriter(tsv_path) as writer:
-        execute_phases(config, cursor, uniform_gen, two_point_gen, writer, rng, df)
+        execute_phases(config, cursor, uniform_gen, two_point_gen, guided_gen, writer, rng, df)
 
     elapsed = time.time() - t0
     logger.info("Done in %.1fs", elapsed)

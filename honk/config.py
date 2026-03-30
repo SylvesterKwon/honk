@@ -20,6 +20,7 @@ class ExpandedQueryBlock:
     weight: float
     query_attr_num: int | None = None
     query_attrs: list[str] | None = None
+    target_selectivity_percent: dict | None = None  # {"lo": float, "hi": float}
 
 
 @dataclass
@@ -84,6 +85,7 @@ def _expand_queries(raw_queries: list[dict]) -> list[ExpandedQueryBlock]:
         strategy = q["strategy"]
         weight = q.get("weight", 1)
         query_attrs = q.get("query_attrs")
+        target_selectivity_percent = q.get("target_selectivity_percent")
 
         # Identify list-valued expansion params
         expand_params: dict[str, list] = {}
@@ -103,6 +105,7 @@ def _expand_queries(raw_queries: list[dict]) -> list[ExpandedQueryBlock]:
                 weight=weight,
                 query_attr_num=q.get("query_attr_num"),
                 query_attrs=query_attrs,
+                target_selectivity_percent=target_selectivity_percent,
             ))
             continue
 
@@ -115,6 +118,7 @@ def _expand_queries(raw_queries: list[dict]) -> list[ExpandedQueryBlock]:
                 weight=weight,
                 query_attr_num=overrides.get("query_attr_num"),
                 query_attrs=query_attrs,
+                target_selectivity_percent=target_selectivity_percent,
             ))
 
     return result
@@ -127,15 +131,27 @@ def _validate_query_block(q: dict) -> None:
     label = q.get("label", "<unnamed>")
     strategy = q.get("strategy")
 
-    if strategy not in ("uniform", "two_point"):
+    if strategy not in ("uniform", "two_point", "guided_two_point"):
         raise HonkConfigError(
-            f"Query '{label}': unknown strategy '{strategy}', expected 'uniform' or 'two_point'"
+            f"Query '{label}': unknown strategy '{strategy}', expected 'uniform', 'two_point', or 'guided_two_point'"
         )
 
     if "query_attr_num" not in q:
         raise HonkConfigError(
             f"Query '{label}': 'query_attr_num' is required"
         )
+
+    tsp = q.get("target_selectivity_percent")
+    if tsp is not None:
+        if not isinstance(tsp, dict) or "lo" not in tsp or "hi" not in tsp:
+            raise HonkConfigError(
+                f"Query '{label}': 'target_selectivity_percent' must have 'lo' and 'hi' keys"
+            )
+        lo, hi = tsp["lo"], tsp["hi"]
+        if not (0 <= lo <= hi <= 100):
+            raise HonkConfigError(
+                f"Query '{label}': 'target_selectivity_percent' requires 0 <= lo <= hi <= 100, got lo={lo}, hi={hi}"
+            )
 
     query_attrs = q.get("query_attrs")
     if query_attrs is not None:
