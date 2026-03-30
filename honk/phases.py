@@ -205,9 +205,15 @@ def _run_write_only(
         raw = rng.bytes(16 * batch_n)
         pks = [uuid.UUID(bytes=raw[i * 16 : (i + 1) * 16], version=4) for i in range(batch_n)]
 
-        # Vectorized JSON serialization via pandas C implementation
+        # Convert datetime columns to epoch seconds (int) before serialization;
+        # to_json(date_unit="s") mis-scales datetime64[us] values.
+        dt_cols = sub.select_dtypes(include=["datetime64"]).columns
+        if len(dt_cols) > 0:
+            sub = sub.copy()
+            for c in dt_cols:
+                sub[c] = sub[c].astype("int64") // 1_000_000
         json_lines = sub.to_json(
-            orient="records", lines=True, date_unit="s", force_ascii=False,
+            orient="records", lines=True, force_ascii=False,
         ).split("\n")
         if json_lines and json_lines[-1] == "":
             json_lines.pop()
