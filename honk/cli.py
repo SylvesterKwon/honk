@@ -69,10 +69,13 @@ def cmd_run(args: argparse.Namespace) -> None:
             sys.exit(1)
         file_paths.append(path)
 
+    # Build filter generators
+    columns = ALL_COLUMNS
+
     # Load dataset
     logger.info("Loading %d dataset file(s)...", len(file_paths))
     t0 = time.time()
-    cursor = DatasetCursor(file_paths)
+    cursor = DatasetCursor(file_paths, columns=columns)
     logger.info("Loaded %d rows in %.1fs", cursor.total_rows, time.time() - t0)
 
     # Resolve unspecified rows to full dataset size
@@ -85,9 +88,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         logger.error(str(e))
         sys.exit(1)
 
-    # Build filter generators
     rng = np.random.default_rng(config.seed)
-    columns = ALL_COLUMNS
 
     logger.info("Learning data distributions...")
     df = cursor.dataframe

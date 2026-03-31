@@ -214,33 +214,71 @@ class GuidedTwoPointFilterGenerator:
         if query_attrs is not None:
             attr_set = set(query_attrs)
             pool = [c for c in pool if c.name in attr_set]
-
-        eq_pool = [c for c in pool if c.filter_type == FilterType.EQUALITY]
-        range_pool = [c for c in pool if c.filter_type == FilterType.RANGE]
-
         k = min(query_attr_num, len(pool))
 
-        # Categorical first, but ensure at least one range slot if possible
-        n_eq = min(len(eq_pool), k)
-        n_range = min(len(range_pool), k - n_eq)
-        if n_range == 0 and range_pool and n_eq > 0:
-            n_eq -= 1
-            n_range = 1
+        max_retries = 10
+        hi_pct = target_selectivity_percent["hi"]
+        lo_pct = target_selectivity_percent["lo"]
 
-        chosen_eq = (
-            list(self.rng.choice(eq_pool, size=n_eq, replace=False))
-            if n_eq > 0 else []
-        )
-        chosen_range = (
-            list(self.rng.choice(range_pool, size=n_range, replace=False))
-            if n_range > 0 else []
-        )
+        while True:
+            # --- Pick k attributes randomly ---
+            chosen = list(self.rng.choice(pool, size=k, replace=False))
+            chosen_eq = [c for c in chosen if c.filter_type == FilterType.EQUALITY]
+            chosen_range = [c for c in chosen if c.filter_type == FilterType.RANGE]
 
-        # --- Categorical filters (two-point style) ---
-        filters: list[dict] = []
+            # --- Inner loop: same attributes, re-roll values only ---
+            for _inner in range(max_retries):
+                # Step 1: eq values
+                filters = self._sample_eq_filters(chosen_eq) if chosen_eq else []
+                if len(filters) != len(chosen_eq):
+                    continue
+
+                cat_frac = compute_selectivity_percent(filters, self.df) / 100.0 if filters else 1.0
+                if chosen_eq and cat_frac < hi_pct / 100.0:
+                    continue
+
+                # Step 2: range filters with random selectivity split
+                if chosen_range:
+                    remaining_sel = (lo_pct / 100.0) / cat_frac, (hi_pct / 100.0) / cat_frac
+                    n_r = len(chosen_range)
+                    weights = self.rng.uniform(0.5, 1.5, size=n_r)
+                    weights /= weights.sum()
+
+                    for i, col in enumerate(chosen_range):
+                        sorted_vals = self._sorted[col.name]
+                        n = len(sorted_vals)
+                        if n == 0:
+                            continue
+
+                        per_lo = max(0.0, min(1.0, remaining_sel[0] ** weights[i]))
+                        per_hi = max(per_lo, min(1.0, remaining_sel[1] ** weights[i]))
+
+                        lo_span = max(1, int(per_lo * n))
+                        hi_span = max(lo_span + 1, int(per_hi * n) + 1)
+                        hi_span = min(hi_span, n)
+                        if lo_span >= hi_span:
+                            lo_span = max(1, hi_span - 1)
+
+                        span = int(self.rng.integers(lo_span, hi_span))
+                        max_anchor = n - span
+                        anchor = int(self.rng.integers(0, max(1, max_anchor + 1)))
+
+                        lo_val = sorted_vals[anchor]
+                        hi_val = sorted_vals[min(anchor + span, n - 1)]
+                        filters.append(_build_range_filter(col, lo_val, hi_val))
+
+                # Step 3: validate filter count AND selectivity
+                if len(filters) != k:
+                    continue
+                final_sel = compute_selectivity_percent(filters, self.df)
+                if lo_pct <= final_sel <= hi_pct:
+                    return filters
+
+    def _sample_eq_filters(self, chosen_eq: list[Column]) -> list[dict]:
+        """Sample two records and build equality filters from chosen columns."""
         indices = self.rng.choice(self.n_rows, size=2, replace=False)
         i_a, i_b = int(indices[0]), int(indices[1])
-
+        filters = []
         for col in chosen_eq:
             val_a = self._values[col.name][i_a]
             val_b = self._values[col.name][i_b]
@@ -256,66 +294,6 @@ class GuidedTwoPointFilterGenerator:
             filters.append({
                 "attr": col.name, "op": "eq", "value": _to_python(chosen_val),
             })
-
-        if not chosen_range:
-            return filters
-
-        # --- Check if categorical filters are already too selective ---
-        hi_pct = target_selectivity_percent["hi"]
-        lo_pct = target_selectivity_percent["lo"]
-        cat_frac = compute_selectivity_percent(filters, self.df) / 100.0 if filters else 1.0
-
-        while filters and cat_frac < hi_pct / 100.0:
-            filters.pop()
-            if filters:
-                cat_frac = compute_selectivity_percent(filters, self.df) / 100.0
-            else:
-                cat_frac = 1.0
-
-        # --- Guided range filters: sequential, each based on measured selectivity ---
-        # First range attr uses cat_frac (already computed); subsequent ones re-measure.
-        n_r = len(chosen_range)
-        current_frac = cat_frac
-
-        for i, col in enumerate(chosen_range):
-            sorted_vals = self._sorted[col.name]
-            n = len(sorted_vals)
-            if n == 0:
-                continue
-
-            # For the 2nd+ range attr, re-measure after previous range filter was added
-            if i > 0 and filters:
-                current_frac = compute_selectivity_percent(filters, self.df) / 100.0
-
-            if current_frac <= 0:
-                anchor = int(self.rng.integers(0, n))
-                filters.append(_build_range_filter(
-                    col, sorted_vals[anchor],
-                    sorted_vals[min(anchor + 1, n - 1)],
-                ))
-                continue
-
-            remaining_attrs = n_r - i
-            remaining_lo = max(0.0, min(1.0, (lo_pct / 100.0) / current_frac))
-            remaining_hi = max(remaining_lo, min(1.0, (hi_pct / 100.0) / current_frac))
-
-            per_lo = remaining_lo ** (1.0 / remaining_attrs)
-            per_hi = remaining_hi ** (1.0 / remaining_attrs)
-
-            lo_span = max(1, int(per_lo * n))
-            hi_span = max(lo_span + 1, int(per_hi * n) + 1)
-            hi_span = min(hi_span, n)
-            if lo_span >= hi_span:
-                lo_span = max(1, hi_span - 1)
-
-            span = int(self.rng.integers(lo_span, hi_span))
-            max_anchor = n - span
-            anchor = int(self.rng.integers(0, max(1, max_anchor + 1)))
-
-            lo_val = sorted_vals[anchor]
-            hi_val = sorted_vals[min(anchor + span, n - 1)]
-            filters.append(_build_range_filter(col, lo_val, hi_val))
-
         return filters
 
 
